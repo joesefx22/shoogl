@@ -554,3 +554,69 @@ model AuditLog {
   @@index([entity])
   @@index([createdAt])
 }
+
+// إضافة إلى الملف الموجود
+model Voucher {
+  id          String    @id @default(cuid())
+  code        String    @unique
+  type        VoucherType @default(PERCENTAGE) // PERCENTAGE, FIXED, FULL
+  value       Float     // قيمة الخصم (نسبة أو مبلغ ثابت)
+  maxUses     Int       @default(0) // 0 يعني غير محدود
+  usedCount   Int       @default(0)
+  minAmount   Float?    // الحد الأدنى للطلب
+  expiresAt   DateTime? // تاريخ انتهاء الصلاحية
+  userId      String?   // إذا كان الكود مخصصاً لمستخدم معين
+  createdBy   String    // من أنشأ الكود (adminId أو ownerId)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  usages      VoucherUsage[]
+  user        User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  creator     User      @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+}
+
+model VoucherUsage {
+  id            String    @id @default(cuid())
+  voucherId     String
+  bookingId     String
+  userId        String
+  discountAmount Float    // القيمة المخصومة بالفعل
+  usedAt        DateTime  @default(now())
+
+  // Relations
+  voucher       Voucher   @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  booking       Booking   @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// تحديث جدول Booking لإضافة voucherCode
+model Booking {
+  // ... الحقول الحالية
+  
+  // إضافة هذه الحقول
+  voucherCode     String?
+  discountAmount  Float   @default(0)
+  finalAmount     Float   // المبلغ النهائي بعد الخصم
+  
+  // علاقة مع voucher إذا تم استخدامه
+  voucher         Voucher? @relation(fields: [voucherCode], references: [code])
+}
+
+// Enum للأكواد
+enum VoucherType {
+  PERCENTAGE
+  FIXED
+  FULL
+}
+
+// إضافة إلى User model
+model User {
+  // ... الحقول الحالية
+  
+  // إضافة هذه العلاقات
+  createdVouchers Voucher[] @relation("VoucherCreator")
+  assignedVouchers Voucher[] @relation("VoucherUser")
+  voucherUsages   VoucherUsage[]
+}
