@@ -1,0 +1,556 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["fullTextSearch"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+// =============================================
+// 👤 نماذج المستخدمين والمصادقة
+// =============================================
+
+enum UserRole {
+  PLAYER
+  STAFF
+  OWNER
+  ADMIN
+}
+
+model User {
+  id              String        @id @default(cuid())
+  email           String        @unique
+  password        String
+  name            String?
+  phone           String?       @unique
+  avatarUrl       String?
+  role            UserRole      @default(PLAYER)
+  primaryRole     UserRole?     @default(PLAYER)
+  
+  // Relations
+  stadiums        Stadium[]     @relation("StadiumStaff")
+  ownedStadiums   Stadium[]     @relation("StadiumOwner")
+  sessions        Session[]
+  bookings        Booking[]
+  playRequests    PlayRequest[] @relation("PlayRequestCreator")
+  participations  Participation[]
+  notifications   Notification[]
+  codesCreated    Code[]        @relation("CodeCreator")
+  
+  // Metadata
+  isActive        Boolean       @default(true)
+  emailVerified   Boolean       @default(false)
+  phoneVerified   Boolean       @default(false)
+  lastLoginAt     DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([email])
+  @@index([phone])
+  @@index([role])
+  @@index([createdAt])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([token])
+}
+
+// =============================================
+// ⚽ نماذج الملاعب
+// =============================================
+
+enum StadiumType {
+  FOOTBALL
+  PADDLE
+  TENNIS
+  BASKETBALL
+}
+
+model Stadium {
+  id              String        @id @default(cuid())
+  name            String
+  description     String?
+  type            StadiumType   @default(FOOTBALL)
+  
+  // Location
+  address         String
+  city            String
+  country         String        @default("Egypt")
+  latitude        Float?
+  longitude       Float?
+  
+  // Pricing
+  pricePerHour    Int           @default(0) // in cents
+  depositAmount   Int?          // in cents (null means no deposit)
+  depositPercent  Int?          // percentage (0-100)
+  
+  // Features
+  features        String[]      // ["lights", "turf", "showers", "toilets", "parking", "cafe"]
+  capacity        Int?
+  
+  // Relations
+  ownerId         String
+  owner           User          @relation("StadiumOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  staff           User[]        @relation("StadiumStaff")
+  images          StadiumImage[]
+  slots           Slot[]
+  bookings        Booking[]
+  playRequests    PlayRequest[]
+  
+  // Status
+  isActive        Boolean       @default(true)
+  isVerified      Boolean       @default(false)
+  
+  // Metadata
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([name])
+  @@index([type])
+  @@index([city])
+  @@index([ownerId])
+  @@index([isActive])
+  @@fulltext([name, description, address, city])
+}
+
+model StadiumImage {
+  id        String   @id @default(cuid())
+  url       String
+  alt       String?
+  order     Int      @default(0)
+  stadiumId String
+  stadium   Stadium  @relation(fields: [stadiumId], references: [id], onDelete: Cascade)
+
+  @@index([stadiumId])
+}
+
+// =============================================
+// ⏰ نماذج المواعيد والجداول
+// =============================================
+
+model Slot {
+  id        String   @id @default(cuid())
+  stadiumId String
+  stadium   Stadium  @relation(fields: [stadiumId], references: [id], onDelete: Cascade)
+  
+  // Time
+  day       DateTime // Date only (time part ignored)
+  startTime String   // Format: "HH:MM"
+  endTime   String   // Format: "HH:MM"
+  duration  Int      // in minutes
+  
+  // Pricing
+  price     Int      @default(0) // in cents (overrides stadium price)
+  
+  // Availability
+  isAvailable Boolean @default(true)
+  isBlocked   Boolean @default(false)
+  maxPlayers  Int?    // Maximum players allowed
+  
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([stadiumId, day, startTime, endTime])
+  @@index([stadiumId])
+  @@index([day])
+  @@index([isAvailable])
+}
+
+// =============================================
+// 📅 نماذج الحجوزات
+// =============================================
+
+enum BookingStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  REFUNDED
+}
+
+model Booking {
+  id              String        @id @default(cuid())
+  
+  // Relations
+  stadiumId       String
+  stadium         Stadium       @relation(fields: [stadiumId], references: [id])
+  slotId          String
+  slot            Slot          @relation(fields: [slotId], references: [id])
+  userId          String
+  user            User          @relation(fields: [userId], references: [id])
+  
+  // Booking Details
+  date            DateTime      // Same as slot.day but for easier querying
+  startTime       String
+  endTime         String
+  playersCount    Int           @default(1)
+  notes           String?
+  
+  // Pricing
+  totalPrice      Int           // in cents
+  depositPaid     Int           @default(0) // in cents
+  discountAmount  Int           @default(0) // in cents
+  
+  // Status
+  status          BookingStatus @default(PENDING_PAYMENT)
+  paymentMethod   String?       // "cash", "online", "code"
+  
+  // Codes & Payments
+  codeId          String?
+  code            Code?         @relation(fields: [codeId], references: [id])
+  paymentTxId     String?
+  
+  // Player Requests
+  playRequestId   String?
+  playRequest     PlayRequest?  @relation(fields: [playRequestId], references: [id])
+  
+  // Metadata
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  expiresAt       DateTime?     // For pending payments
+  cancelledAt     DateTime?
+  completedAt     DateTime?
+
+  @@index([userId])
+  @@index([stadiumId])
+  @@index([slotId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([date])
+}
+
+// =============================================
+// 👥 نماذج طلبات اللاعبين
+// =============================================
+
+enum PlayRequestStatus {
+  OPEN
+  PARTIAL
+  CLOSED
+  CANCELLED
+}
+
+model PlayRequest {
+  id              String          @id @default(cuid())
+  
+  // Relations
+  stadiumId       String
+  stadium         Stadium         @relation(fields: [stadiumId], references: [id])
+  creatorId       String
+  creator         User            @relation("PlayRequestCreator", fields: [creatorId], references: [id])
+  bookingId       String?         @unique
+  booking         Booking?        @relation(fields: [bookingId], references: [id])
+  
+  // Request Details
+  title           String?
+  description     String?
+  date            DateTime
+  timeSlot        String?         // "HH:MM-HH:MM"
+  
+  // Players Info
+  playersNeeded   Int             @default(1)
+  playersJoined   Int             @default(0)
+  ageGroup        String?         // "12-16", "17-25", "26+"
+  skillLevel      String?         // "beginner", "intermediate", "advanced"
+  
+  // Status
+  status          PlayRequestStatus @default(OPEN)
+  
+  // Participants
+  participations  Participation[]
+  
+  // Metadata
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([stadiumId])
+  @@index([creatorId])
+  @@index([date])
+  @@index([status])
+}
+
+model Participation {
+  id              String      @id @default(cuid())
+  
+  // Relations
+  playRequestId   String
+  playRequest     PlayRequest @relation(fields: [playRequestId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Participation Details
+  playersCount    Int         @default(1) // How many players this user brings
+  contactPhone    String?
+  notes           String?
+  
+  // Status
+  status          String      @default("PENDING") // "PENDING", "ACCEPTED", "REJECTED"
+  
+  // Metadata
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@unique([playRequestId, userId])
+  @@index([playRequestId])
+  @@index([userId])
+}
+
+// =============================================
+// 💳 نماذج الأكواد والمدفوعات
+// =============================================
+
+enum CodeType {
+  DISCOUNT
+  COMPENSATION
+  PAYMENT
+  REFERRAL
+}
+
+model Code {
+  id              String      @id @default(cuid())
+  code            String      @unique
+  
+  // Type & Value
+  type            CodeType    @default(DISCOUNT)
+  discountPercent Int?        // 0-100
+  discountAmount  Int?        // in cents
+  maxDiscount     Int?        // in cents (maximum discount amount)
+  
+  // Usage Limits
+  maxUsage        Int?        @default(1)
+  usedCount       Int         @default(0)
+  perUserLimit    Int?        @default(1)
+  
+  // Validity
+  expiresAt       DateTime?
+  isActive        Boolean     @default(true)
+  
+  // Owner & Creator
+  ownerId         String?
+  owner           User?       @relation(fields: [ownerId], references: [id])
+  createdById     String
+  createdBy       User        @relation("CodeCreator", fields: [createdById], references: [id])
+  
+  // Relations
+  usages          CodeUsage[]
+  bookings        Booking[]
+  
+  // Metadata
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([code])
+  @@index([type])
+  @@index([ownerId])
+  @@index([createdById])
+  @@index([expiresAt])
+  @@index([isActive])
+}
+
+model CodeUsage {
+  id              String      @id @default(cuid())
+  
+  // Relations
+  codeId          String
+  code            Code        @relation(fields: [codeId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User        @relation(fields: [userId], references: [id])
+  bookingId       String?     @unique
+  booking         Booking?    @relation(fields: [bookingId], references: [id])
+  
+  // Usage Details
+  discountApplied Int         // in cents
+  originalAmount  Int         // in cents
+  finalAmount     Int         // in cents
+  
+  // Metadata
+  usedAt          DateTime    @default(now())
+
+  @@unique([codeId, bookingId])
+  @@index([codeId])
+  @@index([userId])
+  @@index([bookingId])
+  @@index([usedAt])
+}
+
+model PaymentTransaction {
+  id              String      @id @default(cuid())
+  
+  // Relations
+  bookingId       String?     @unique
+  booking         Booking?    @relation(fields: [bookingId], references: [id])
+  userId          String
+  user            User        @relation(fields: [userId], references: [id])
+  
+  // Payment Details
+  amount          Int         // in cents
+  currency        String      @default("EGP")
+  provider        String      // "paymob", "vodafone", "orange", "etisalat", "instapay"
+  providerTxId    String?     @unique
+  providerOrderId String?
+  
+  // Status
+  status          String      // "PENDING", "SUCCESS", "FAILED", "REFUNDED"
+  failureReason   String?
+  
+  // Metadata
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  completedAt     DateTime?
+
+  @@index([bookingId])
+  @@index([userId])
+  @@index([provider])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// =============================================
+// 🔔 نماذج الإشعارات
+// =============================================
+
+enum NotificationType {
+  BOOKING_CREATED
+  BOOKING_CONFIRMED
+  BOOKING_CANCELLED
+  PAYMENT_SUCCESS
+  PAYMENT_FAILED
+  PLAY_REQUEST_CREATED
+  PLAY_REQUEST_JOINED
+  PLAY_REQUEST_ACCEPTED
+  PLAY_REQUEST_REJECTED
+  NEW_MESSAGE
+  SYSTEM_ALERT
+}
+
+model Notification {
+  id                String           @id @default(cuid())
+  
+  // Relations
+  userId            String
+  user              User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Content
+  type              NotificationType
+  title             String
+  message           String
+  data              Json?            // Additional data in JSON format
+  
+  // Link to related entity
+  relatedId         String?          // bookingId, playRequestId, etc.
+  relatedType       String?          // "booking", "playRequest", "payment"
+  
+  // Status
+  isRead            Boolean          @default(false)
+  isSeen            Boolean          @default(false)
+  
+  // Delivery
+  sentViaEmail      Boolean          @default(false)
+  sentViaSMS        Boolean          @default(false)
+  sentViaPush       Boolean          @default(false)
+  
+  // Metadata
+  createdAt         DateTime         @default(now())
+  readAt            DateTime?
+  seenAt            DateTime?
+
+  @@index([userId])
+  @@index([type])
+  @@index([isRead])
+  @@index([createdAt])
+  @@index([userId, isRead])
+}
+
+// =============================================
+// 📊 نماذج التقارير والإحصائيات
+// =============================================
+
+model Attendance {
+  id              String      @id @default(cuid())
+  
+  // Relations
+  staffId         String
+  staff           User        @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  stadiumId       String
+  stadium         Stadium     @relation(fields: [stadiumId], references: [id])
+  
+  // Attendance Details
+  date            DateTime    // Date only
+  checkIn         DateTime?
+  checkOut        DateTime?
+  workingHours    Float?      // in hours
+  
+  // Status
+  status          String      @default("PRESENT") // "PRESENT", "ABSENT", "LATE", "LEAVE"
+  notes           String?
+  
+  // Metadata
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@unique([staffId, stadiumId, date])
+  @@index([staffId])
+  @@index([stadiumId])
+  @@index([date])
+}
+
+// =============================================
+// 📍 نماذج إضافية
+// =============================================
+
+model Settings {
+  id              String      @id @default(cuid())
+  key             String      @unique
+  value           String
+  type            String      @default("string") // "string", "number", "boolean", "json"
+  category        String      @default("general")
+  description     String?
+  isPublic        Boolean     @default(false)
+  
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([key])
+  @@index([category])
+}
+
+model AuditLog {
+  id              String      @id @default(cuid())
+  
+  // Actor
+  userId          String?
+  user            User?       @relation(fields: [userId], references: [id])
+  userAgent       String?
+  ipAddress       String?
+  
+  // Action
+  action          String      // "CREATE", "UPDATE", "DELETE", "LOGIN", "LOGOUT"
+  entity          String      // "User", "Booking", "Stadium", etc.
+  entityId        String?
+  
+  // Changes
+  oldData         Json?
+  newData         Json?
+  
+  // Metadata
+  createdAt       DateTime    @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([entity])
+  @@index([createdAt])
+}
