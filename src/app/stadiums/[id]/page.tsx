@@ -9,6 +9,7 @@ import { BookingModal } from '@/components/stadiums/BookingModal';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { Button } from '@/components/ui/Button';
 import { useStadiumDetail } from './hooks/useStadiumDetail';
+import { useAuth } from '@/hooks/auth/useAuth';
 import { 
   Calendar, 
   Clock, 
@@ -19,12 +20,15 @@ import {
   Users,
   ChevronLeft,
   Share2,
-  Heart
+  Heart,
+  AlertCircle
 } from 'lucide-react';
+import { getNotificationService } from '@/lib/services/notification.service';
 
 export default function StadiumDetailPage() {
   const params = useParams();
   const stadiumId = params.id as string;
+  const { user } = useAuth();
   
   const {
     stadium,
@@ -39,23 +43,102 @@ export default function StadiumDetailPage() {
   } = useStadiumDetail(stadiumId);
 
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
+  const [isFavorite, setIsFavorite] = useState(false);
+  const [favoriteLoading, setFavoriteLoading] = useState(false);
 
-  const handleBookNow = () => {
-    if (selectedSlot) {
-      setIsBookingModalOpen(true);
+  useEffect(() => {
+    checkIfFavorite();
+  }, [stadiumId, user]);
+
+  const checkIfFavorite = async () => {
+    if (!user || !stadiumId) return;
+    
+    try {
+      const response = await fetch(`/api/favorites/check?stadiumId=${stadiumId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setIsFavorite(data.isFavorite);
+      }
+    } catch (error) {
+      console.error('Error checking favorite:', error);
     }
   };
 
-  const handleShare = () => {
-    if (navigator.share) {
-      navigator.share({
-        title: stadium?.name,
-        text: `احجز ${stadium?.name} عبر احجزلي`,
-        url: window.location.href,
+  const handleToggleFavorite = async () => {
+    if (!user) {
+      alert('يجب تسجيل الدخول لإضافة إلى المفضلة');
+      return;
+    }
+
+    setFavoriteLoading(true);
+    try {
+      const method = isFavorite ? 'DELETE' : 'POST';
+      const response = await fetch('/api/favorites', {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ stadiumId }),
       });
+
+      if (response.ok) {
+        setIsFavorite(!isFavorite);
+      }
+    } catch (error) {
+      console.error('Error toggling favorite:', error);
+    } finally {
+      setFavoriteLoading(false);
+    }
+  };
+
+  const handleShare = async () => {
+    if (navigator.share && stadium) {
+      try {
+        await navigator.share({
+          title: stadium.name,
+          text: `احجز ${stadium.name} عبر احجزلي - ${stadium.location.address}`,
+          url: window.location.href,
+        });
+      } catch (error) {
+        console.error('Error sharing:', error);
+        copyToClipboard();
+      }
     } else {
-      navigator.clipboard.writeText(window.location.href);
-      alert('تم نسخ الرابط إلى الحافظة');
+      copyToClipboard();
+    }
+  };
+
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(window.location.href);
+    alert('تم نسخ الرابط إلى الحافظة');
+  };
+
+  const handleBookNow = () => {
+    if (!user) {
+      alert('يجب تسجيل الدخول لحجز ملعب');
+      return;
+    }
+    
+    if (selectedSlot) {
+      setIsBookingModalOpen(true);
+    } else {
+      alert('يرجى اختيار وقت للحجز أولاً');
+    }
+  };
+
+  const handleBookingSuccess = () => {
+    loadStadiumData(); // إعادة تحميل البيانات
+    selectSlot(null); // إعادة تعيين الساعة المختارة
+    
+    // إرسال إشعار
+    if (user && stadium) {
+      const notificationService = getNotificationService();
+      notificationService.createNotification(user.id, {
+        type: 'BOOKING_CREATED',
+        title: 'تم إنشاء الحجز',
+        message: `تم إنشاء حجز في ${stadium.name}`,
+        sendEmail: true,
+      });
     }
   };
 
@@ -71,6 +154,7 @@ export default function StadiumDetailPage() {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
+          <AlertCircle className="h-16 w-16 text-red-500 mx-auto mb-4" />
           <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
             {error || 'الملعب غير موجود'}
           </h2>
@@ -110,9 +194,11 @@ export default function StadiumDetailPage() {
                 <Button
                   variant="outline"
                   size="sm"
+                  onClick={handleToggleFavorite}
+                  disabled={favoriteLoading}
                 >
-                  <Heart className="h-4 w-4 ml-2 rtl:mr-2 rtl:ml-0" />
-                  حفظ
+                  <Heart className={`h-4 w-4 ml-2 rtl:mr-2 rtl:ml-0 ${isFavorite ? 'fill-red-500 text-red-500' : ''}`} />
+                  {isFavorite ? 'مفضل' : 'حفظ'}
                 </Button>
               </div>
               
@@ -124,31 +210,6 @@ export default function StadiumDetailPage() {
                 <span className="text-gray-600 dark:text-gray-400 mr-2 rtl:ml-2 rtl:mr-0">
                   ({stadium.totalRatings} تقييم)
                 </span>
-              </div>
-            </div>
-
-            {/* Description */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6 mb-8">
-              <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
-                وصف الملعب
-              </h3>
-              <p className="text-gray-600 dark:text-gray-300 leading-relaxed">
-                {stadium.description || 'لا يوجد وصف متاح للملعب.'}
-              </p>
-            </div>
-
-            {/* Features & Amenities */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6 mb-8">
-              <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
-                المميزات والمرافق
-              </h3>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                {stadium.features.map((feature, index) => (
-                  <div key={index} className="flex items-center">
-                    <div className="w-2 h-2 bg-green-500 rounded-full ml-3 rtl:mr-3 rtl:ml-0"></div>
-                    <span className="text-gray-700 dark:text-gray-300">{feature}</span>
-                  </div>
-                ))}
               </div>
             </div>
 
@@ -306,45 +367,6 @@ export default function StadiumDetailPage() {
                 stadiumName={stadium.name}
               />
             </div>
-
-            {/* Rules Card */}
-            {stadium.rules && stadium.rules.length > 0 && (
-              <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
-                <h4 className="text-lg font-bold text-gray-900 dark:text-white mb-4">
-                  قواعد الملعب
-                </h4>
-                <ul className="space-y-2">
-                  {stadium.rules.map((rule, index) => (
-                    <li key={index} className="flex items-start">
-                      <div className="w-1.5 h-1.5 bg-gray-400 rounded-full mt-2 ml-3 rtl:mr-3 rtl:ml-0"></div>
-                      <span className="text-gray-600 dark:text-gray-300">{rule}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {/* Owner Info */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
-              <h4 className="text-lg font-bold text-gray-900 dark:text-white mb-4">
-                مالك الملعب
-              </h4>
-              <div className="flex items-center">
-                <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center ml-3 rtl:mr-3 rtl:ml-0">
-                  <span className="text-primary font-bold text-lg">
-                    {stadium.owner.name.charAt(0)}
-                  </span>
-                </div>
-                <div>
-                  <p className="font-medium text-gray-900 dark:text-white">
-                    {stadium.owner.name}
-                  </p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">
-                    مالك منذ {new Date(stadium.createdAt).toLocaleDateString('ar-EG')}
-                  </p>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
       </div>
@@ -356,10 +378,7 @@ export default function StadiumDetailPage() {
         stadium={stadium}
         selectedSlot={selectedSlot}
         selectedDate={selectedDay}
-        onSuccess={() => {
-          loadStadiumData();
-          selectSlot(null);
-        }}
+        onSuccess={handleBookingSuccess}
       />
     </div>
   );
