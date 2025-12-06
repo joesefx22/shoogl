@@ -262,3 +262,114 @@ self.addEventListener('notificationclick', (event) => {
       })
   );
 });
+
+// Service Worker for Push Notifications
+const CACHE_NAME = 'ehgzly-v1';
+const urlsToCache = [
+  '/',
+  '/manifest.json',
+  '/favicon.ico',
+];
+
+// Install Service Worker
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME)
+      .then((cache) => {
+        return cache.addAll(urlsToCache);
+      })
+  );
+});
+
+// Activate Service Worker
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((cacheNames) => {
+      return Promise.all(
+        cacheNames.map((cacheName) => {
+          if (cacheName !== CACHE_NAME) {
+            return caches.delete(cacheName);
+          }
+        })
+      );
+    })
+  );
+});
+
+// Fetch from cache or network
+self.addEventListener('fetch', (event) => {
+  event.respondWith(
+    caches.match(event.request)
+      .then((response) => {
+        if (response) {
+          return response;
+        }
+        return fetch(event.request);
+      })
+  );
+});
+
+// Push Notification Event
+self.addEventListener('push', (event) => {
+  const data = event.data ? event.data.json() : {};
+  
+  const options = {
+    body: data.body || 'إشعار جديد من احجزلي',
+    icon: '/icon-192x192.png',
+    badge: '/icon-72x72.png',
+    vibrate: [200, 100, 200],
+    data: {
+      url: data.url || '/',
+      timestamp: Date.now(),
+    },
+    actions: [
+      {
+        action: 'open',
+        title: 'فتح',
+      },
+      {
+        action: 'dismiss',
+        title: 'تجاهل',
+      }
+    ]
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'احجزلي', options)
+  );
+});
+
+// Notification Click Event
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+
+  if (event.action === 'open') {
+    event.waitUntil(
+      clients.openWindow(event.notification.data.url)
+    );
+  } else if (event.action === 'dismiss') {
+    // تم تجاهل الإشعار
+  } else {
+    // Click on notification body
+    event.waitUntil(
+      clients.openWindow(event.notification.data.url)
+    );
+  }
+});
+
+// Background Sync
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'sync-bookings') {
+    event.waitUntil(syncBookings());
+  }
+});
+
+async function syncBookings() {
+  // مزامنة البيانات في الخلفية
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    // تنفيذ عمليات المزامنة هنا
+  } catch (error) {
+    console.error('Background sync error:', error);
+  }
+}
