@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
+import { auth } from '@/lib/auth/auth';
 import { getVoucherSystem } from '@/lib/integrations/vouchers';
 
 const prisma = new PrismaClient();
 
 export async function POST(request: NextRequest) {
   try {
-    const { code, amount, userId } = await request.json();
+    const session = await auth();
+    const { code, amount, bookingId } = await request.json();
 
     if (!code || !amount) {
       return NextResponse.json(
@@ -15,28 +17,29 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const voucherSystem = getVoucherSystem();
-    const validation = await voucherSystem.validateVoucher(code, amount, userId);
+    // إذا كان هناك bookingId، التحقق من الحجز
+    if (bookingId && session?.user) {
+      const booking = await prisma.booking.findUnique({
+        where: { id: bookingId },
+      });
 
-    if (validation.valid) {
-      return NextResponse.json({
-        valid: true,
-        discountAmount: validation.discountAmount,
-        voucher: {
-          code: validation.voucher?.code,
-          type: validation.voucher?.type,
-          value: validation.voucher?.value,
-          expiresAt: validation.voucher?.expiresAt,
-        },
-        message: 'الكود صالح',
-      });
-    } else {
-      return NextResponse.json({
-        valid: false,
-        discountAmount: 0,
-        message: validation.message,
-      });
+      if (!booking || booking.userId !== session.user.id) {
+        return NextResponse.json(
+          { valid: false, message: 'الحجز غير موجود أو غير مصرح' },
+          { status: 403 }
+        );
+      }
     }
+
+    const voucherSystem = getVoucherSystem();
+    const validation = await voucherSystem.validateVoucher(
+      code.toUpperCase(),
+      amount,
+      session?.user?.id
+    );
+
+    return NextResponse.json(validation);
+
   } catch (error) {
     console.error('Voucher validation error:', error);
     return NextResponse.json(
